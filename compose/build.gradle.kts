@@ -21,14 +21,14 @@ val mainComponents =
     listOf(
         ComposeComponent(":compose:animation:animation"),
         ComposeComponent(":compose:animation:animation-core"),
-        ComposeComponent(":compose:animation:animation-graphics", supportedPlatforms = ComposePlatforms.JVM_BASED),
+        ComposeComponent(":compose:animation:animation-graphics"),
         ComposeComponent(":compose:foundation:foundation"),
         ComposeComponent(":compose:foundation:foundation-layout"),
         ComposeComponent(":compose:material:material"),
-        ComposeComponent(":compose:material3:material3", supportedPlatforms = ComposePlatforms.JVM_BASED),
+        ComposeComponent(":compose:material3:material3"),
         ComposeComponent(":compose:material:material-icons-core"),
         ComposeComponent(":compose:material:material-ripple"),
-        ComposeComponent(":compose:runtime:runtime"),
+        ComposeComponent(":compose:runtime:runtime", supportedPlatforms = ComposePlatforms.ALL),
         ComposeComponent(":compose:runtime:runtime-saveable"),
         ComposeComponent(":compose:ui:ui"),
         ComposeComponent(":compose:ui:ui-geometry"),
@@ -37,25 +37,18 @@ val mainComponents =
         ComposeComponent(":compose:ui:ui-test-junit4", supportedPlatforms = ComposePlatforms.JVM_BASED),
         ComposeComponent(":compose:ui:ui-text"),
         ComposeComponent(":compose:ui:ui-tooling", supportedPlatforms = ComposePlatforms.JVM_BASED),
+        ComposeComponent(":compose:ui:ui-tooling-data", supportedPlatforms = ComposePlatforms.JVM_BASED),
         ComposeComponent(":compose:ui:ui-tooling-preview", supportedPlatforms = ComposePlatforms.JVM_BASED),
         ComposeComponent(":compose:ui:ui-unit"),
-        ComposeComponent(":compose:ui:ui-util", supportedPlatforms = ComposePlatforms.ALL),
+        ComposeComponent(":compose:ui:ui-util"),
     )
 
 val iconsComponents =
     listOf(
-        ComposeComponent(":compose:material:material-icons-extended", supportedPlatforms = ComposePlatforms.JVM_BASED),
+        ComposeComponent(":compose:material:material-icons-extended"),
     )
 
 fun ComposePublishingTask.mainPublications() {
-    publish(":compose:compiler:compiler", publications = listOf("Maven"))
-    publish(":compose:compiler:compiler-hosted", publications = listOf("Maven"))
-    publish(
-        ":compose:ui:ui-tooling-data",
-        onlyWithPlatforms = setOf(ComposePlatforms.AndroidRelease, ComposePlatforms.AndroidDebug),
-        publications = listOf("Maven")
-    )
-
     publish(
         ":compose:desktop:desktop",
         onlyWithPlatforms = setOf(ComposePlatforms.Desktop),
@@ -108,6 +101,7 @@ tasks.register("testComposeJbDesktop") {
     dependsOnComposeTask(":compose:ui:ui:desktopTest")
     dependsOnComposeTask(":compose:ui:ui-graphics:desktopTest")
     dependsOnComposeTask(":compose:ui:ui-text:desktopTest")
+    dependsOnComposeTask(":compose:ui:ui-test-junit4:desktopTest")
     dependsOnComposeTask(":compose:foundation:foundation:desktopTest")
     dependsOnComposeTask(":compose:foundation:foundation-layout:desktopTest")
     dependsOnComposeTask(":compose:material:material:desktopTest")
@@ -118,7 +112,12 @@ tasks.register("testComposeJbDesktop") {
 
 tasks.register("testComposeJbWeb") {
     dependsOnComposeTask(":compose:runtime:runtime:jsTest")
-    dependsOnComposeTask(":compose:runtime:runtime:test")
+}
+
+tasks.register("testUIKit") {
+    val subtaskName = if (System.getProperty("os.arch") == "aarch64") "uikitSimArm64Test" else "uikitX64Test"
+    dependsOnComposeTask(":compose:ui:ui-text:$subtaskName")
+    dependsOnComposeTask(":compose:ui:ui:$subtaskName")
 }
 
 tasks.register("buildNativeDemo") {
@@ -154,6 +153,36 @@ tasks.register("testComposeModules") { // used in https://github.com/JetBrains/a
 
 tasks.register("run") {
     dependsOnComposeTask(":compose:desktop:desktop:desktop-samples:run")
+}
+
+for (i in 1..3) {
+    tasks.register("run$i") {
+        dependsOnComposeTask(":compose:desktop:desktop:desktop-samples:run$i")
+    }
+}
+
+tasks.register("runSwing") {
+    dependsOnComposeTask(":compose:desktop:desktop:desktop-samples:runSwing")
+}
+
+tasks.register("runWindowApi") {
+    dependsOnComposeTask(":compose:desktop:desktop:desktop-samples:runWindowApi")
+}
+
+tasks.register("runVsync") {
+    dependsOnComposeTask(":compose:desktop:desktop:desktop-samples:runVsync")
+}
+
+tasks.register("runLayout") {
+    dependsOnComposeTask(":compose:desktop:desktop:desktop-samples:runLayout")
+}
+
+tasks.register("runMppJs") {
+    dependsOnComposeTask(":compose:mpp:demo:jsRun")
+}
+
+tasks.register("runMppMacos") {
+    dependsOnComposeTask(":compose:mpp:demo:runDebugExecutableMacosX64")
 }
 
 val mavenCentral = MavenCentralProperties(project)

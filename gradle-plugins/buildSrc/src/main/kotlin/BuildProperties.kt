@@ -15,11 +15,11 @@ object BuildProperties {
     fun composeVersion(project: Project): String =
         System.getenv("COMPOSE_GRADLE_PLUGIN_COMPOSE_VERSION")
             ?: project.findProperty("compose.version") as String
+    fun testsAndroidxCompilerVersion(project: Project): String =
+        project.findProperty("compose.tests.androidx.compiler.version") as String
+    fun testsAndroidxCompilerCompatibleVersion(project: Project): String =
+        project.findProperty("compose.tests.androidx.compatible.kotlin.version") as String
     fun deployVersion(project: Project): String =
         System.getenv("COMPOSE_GRADLE_PLUGIN_VERSION")
             ?: project.findProperty("deploy.version") as String
-    fun experimentalOELPublication(project: Project): Boolean =
-        project.findProperty("oel.publication") == "true"
-    fun oelAndroidXVersion(project: Project): String? =
-        project.findProperty("oel.androidx.version") as String?
 }

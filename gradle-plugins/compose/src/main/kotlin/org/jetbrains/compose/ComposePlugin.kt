@@ -19,33 +19,33 @@ import org.gradle.api.artifacts.repositories.MavenArtifactRepository
 import org.gradle.api.plugins.ExtensionAware
 import org.jetbrains.compose.android.AndroidExtension
 import org.jetbrains.compose.desktop.DesktopExtension
-import org.jetbrains.compose.desktop.application.internal.ComposeProperties
 import org.jetbrains.compose.desktop.application.internal.configureDesktop
-import org.jetbrains.compose.desktop.application.internal.currentTarget
 import org.jetbrains.compose.desktop.preview.internal.initializePreview
 import org.jetbrains.compose.experimental.dsl.ExperimentalExtension
+import org.jetbrains.compose.experimental.internal.checkExperimentalTargetsWithSkikoIsEnabled
 import org.jetbrains.compose.experimental.internal.configureExperimental
-import org.jetbrains.compose.internal.COMPOSE_PLUGIN_ID
-import org.jetbrains.compose.internal.KOTLIN_JS_PLUGIN_ID
-import org.jetbrains.compose.internal.KOTLIN_MPP_PLUGIN_ID
+import org.jetbrains.compose.internal.utils.currentTarget
 import org.jetbrains.compose.web.WebExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinDependencyHandler
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.jetbrains.kotlin.gradle.plugin.getKotlinPluginVersion
+import org.jetbrains.kotlin.gradle.dsl.KotlinCompile
 
 internal val composeVersion get() = ComposeBuildConfig.composeVersion
 
 class ComposePlugin : Plugin<Project> {
     override fun apply(project: Project) {
-        val composeExtension = project.extensions.create("compose", ComposeExtension::class.java)
+        val composeExtension = project.extensions.create("compose", ComposeExtension::class.java, project)
         val desktopExtension = composeExtension.extensions.create("desktop", DesktopExtension::class.java)
         val androidExtension = composeExtension.extensions.create("android", AndroidExtension::class.java)
         val experimentalExtension = composeExtension.extensions.create("experimental", ExperimentalExtension::class.java)
+
+        project.dependencies.extensions.add("compose", Dependencies(project))
 
         if (!project.buildFile.endsWith(".gradle.kts")) {
             setUpGroovyDslExtensions(project)
         }
 
-        project.initializePreview()
+        project.initializePreview(desktopExtension)
         composeExtension.extensions.create("web", WebExtension::class.java)
 
         project.plugins.apply(ComposeCompilerKotlinSupportPlugin::class.java)
@@ -53,6 +53,7 @@ class ComposePlugin : Plugin<Project> {
         project.afterEvaluate {
             configureDesktop(project, desktopExtension)
             project.configureExperimental(composeExtension, experimentalExtension)
+            project.checkExperimentalTargetsWithSkikoIsEnabled()
 
             if (androidExtension.useAndroidX) {
                 project.logger.warn("useAndroidX is an experimental feature at the moment!")
@@ -68,67 +69,12 @@ class ComposePlugin : Plugin<Project> {
                 }
             }
 
-            //redirecting all android artifacts to androidx.compose
-            project.dependencies.modules {
-                if (!androidExtension.useAndroidX && !ComposeBuildConfig.experimentalOELPublication) {
-                    // Replace 'androidx.compose' artifacts by 'org.jetbrains.compose' artifacts.
-                    // It is needed, because 'org.jetbrains.compose' artifacts are the same artifacts as 'androidx.compose'
-                    // (but with different version).
-                    // And Gradle will throw an error when it cannot determine which class from which artifact should it use.
-                    //
-                    // Note that we don't provide a configuration parameter to disable dependency replacement,
-                    // because without replacement, gradle will fail anyway because classpath contains two incompatible artifacts.
-                    //
-                    // We should define all replacements, even for transitive dependencies.
-                    // For example, a library can depend on androidx.compose.foundation:foundation-layout
-                    //
-                    // List of all org.jetbrains.compose libraries is here:
-                    // https://maven.pkg.jetbrains.space/public/p/compose/dev/org/jetbrains/compose/
-                    //
-                    // (use ./gradle printAllAndroidxReplacements to know what dependencies should be here)
-                    //
-                    // It is temporarily solution until we will be publishing all MPP artifacts in Google Maven repository.
-                    // Or align versions with androidx artifacts and point MPP-android artifacts to androidx artifacts (is it possible?)
-
-                    listOf(
-                        "androidx.compose.animation:animation",
-                        "androidx.compose.animation:animation-core",
-                        "androidx.compose.animation:animation-graphics",
-                        "androidx.compose.compiler:compiler",
-                        "androidx.compose.compiler:compiler-hosted",
-                        "androidx.compose.foundation:foundation",
-                        "androidx.compose.foundation:foundation-layout",
-                        "androidx.compose.material:material",
-                        "androidx.compose.material:material-icons-core",
-                        "androidx.compose.material:material-icons-extended",
-                        "androidx.compose.material:material-ripple",
-                        "androidx.compose.material:material3",
-                        "androidx.compose.runtime:runtime",
-                        "androidx.compose.runtime:runtime-saveable",
-                        "androidx.compose.ui:ui",
-                        "androidx.compose.ui:ui-geometry",
-                        "androidx.compose.ui:ui-graphics",
-                        "androidx.compose.ui:ui-test",
-                        "androidx.compose.ui:ui-test-junit4",
-                        "androidx.compose.ui:ui-text",
-                        "androidx.compose.ui:ui-unit",
-                        "androidx.compose.ui:ui-util"
-                    ).forEach() { module ->
-                        it.replaceAndroidx(
-                            module,
-                            module.replace("androidx.compose", "org.jetbrains.compose")
-                        )
-                    }
-                }
-            }
-
-            val overrideDefaultJvmTarget = ComposeProperties.overrideKotlinJvmTarget(project.providers).get()
-            project.tasks.withType(KotlinCompile::class.java) {
+            project.tasks.withType(KotlinCompile::class.java).configureEach {
                 it.kotlinOptions.apply {
-                    if (overrideDefaultJvmTarget) {
-                        jvmTarget = "11".takeIf { jvmTarget.toDouble() < 11 } ?: jvmTarget
-                    }
-                    useIR = true
+                    freeCompilerArgs = freeCompilerArgs +
+                            composeExtension.kotlinCompilerPluginArgs.get().flatMap { arg ->
+                                listOf("-P", "plugin:androidx.compose.compiler.plugins.kotlin:$arg")
+                            }
                 }
             }
         }
@@ -160,13 +106,14 @@ class ComposePlugin : Plugin<Project> {
         }
     }
 
-    object Dependencies {
+    @Suppress("DEPRECATION")
+    class Dependencies(project: Project) {
         val desktop = DesktopDependencies
+        val compiler = CompilerDependencies(project)
         val animation get() = composeDependency("org.jetbrains.compose.animation:animation")
         val animationGraphics get() = composeDependency("org.jetbrains.compose.animation:animation-graphics")
         val foundation get() = composeDependency("org.jetbrains.compose.foundation:foundation")
         val material get() = composeDependency("org.jetbrains.compose.material:material")
-        @ExperimentalComposeLibrary
         val material3 get() = composeDependency("org.jetbrains.compose.material3:material3")
         val runtime get() = composeDependency("org.jetbrains.compose.runtime:runtime")
         val ui get() = composeDependency("org.jetbrains.compose.ui:ui")
@@ -175,7 +122,10 @@ class ComposePlugin : Plugin<Project> {
         val uiTooling get() = composeDependency("org.jetbrains.compose.ui:ui-tooling")
         val preview get() = composeDependency("org.jetbrains.compose.ui:ui-tooling-preview")
         val materialIconsExtended get() = composeDependency("org.jetbrains.compose.material:material-icons-extended")
+        val components get() = CommonComponentsDependencies
+        @Deprecated("Use compose.html", replaceWith = ReplaceWith("html"))
         val web: WebDependencies get() = WebDependencies
+        val html: HtmlDependencies get() = HtmlDependencies
     }
 
     object DesktopDependencies {
@@ -193,6 +143,21 @@ class ComposePlugin : Plugin<Project> {
         }
     }
 
+    class CompilerDependencies(private val project: Project) {
+        fun forKotlin(version: String) = "org.jetbrains.compose.compiler:compiler:" +
+                ComposeCompilerCompatibility.compilerVersionFor(version)
+
+        /**
+         * Compose Compiler that is chosen by the version of Kotlin applied to the Gradle project
+         */
+        val auto get() = forKotlin(project.getKotlinPluginVersion())
+    }
+
+    object CommonComponentsDependencies {
+        @ExperimentalComposeLibrary
+        val resources = composeDependency("org.jetbrains.compose.components:components-resources")
+    }
+
     object DesktopComponentsDependencies {
         @ExperimentalComposeLibrary
         val splitPane = composeDependency("org.jetbrains.compose.components:components-splitpane")
@@ -201,22 +166,32 @@ class ComposePlugin : Plugin<Project> {
         val animatedImage = composeDependency("org.jetbrains.compose.components:components-animatedimage")
     }
 
+    @Deprecated("Use compose.html")
     object WebDependencies {
         val core by lazy {
-            composeDependency("org.jetbrains.compose.web:web-core")
+            composeDependency("org.jetbrains.compose.html:html-core")
         }
 
         val svg by lazy {
-            composeDependency("org.jetbrains.compose.web:web-svg")
-        }
-
-        @Deprecated("compose.web.web-widgets API is deprecated")
-        val widgets by lazy {
-            composeDependency("org.jetbrains.compose.web:web-widgets")
+            composeDependency("org.jetbrains.compose.html:html-svg")
         }
 
         val testUtils by lazy {
-            composeDependency("org.jetbrains.compose.web:test-utils")
+            composeDependency("org.jetbrains.compose.html:html-test-utils")
+        }
+    }
+
+    object HtmlDependencies {
+        val core by lazy {
+            composeDependency("org.jetbrains.compose.html:html-core")
+        }
+
+        val svg by lazy {
+            composeDependency("org.jetbrains.compose.html:html-svg")
+        }
+
+        val testUtils by lazy {
+            composeDependency("org.jetbrains.compose.html:html-test-utils")
         }
     }
 }
@@ -225,19 +200,15 @@ fun RepositoryHandler.jetbrainsCompose(): MavenArtifactRepository =
     maven { repo -> repo.setUrl("https://maven.pkg.jetbrains.space/public/p/compose/dev") }
 
 fun KotlinDependencyHandler.compose(groupWithArtifact: String) = composeDependency(groupWithArtifact)
-val KotlinDependencyHandler.compose get() = ComposePlugin.Dependencies
 
 fun DependencyHandler.compose(groupWithArtifact: String) = composeDependency(groupWithArtifact)
-val DependencyHandler.compose get() = ComposePlugin.Dependencies
 
 private fun composeDependency(groupWithArtifact: String) = "$groupWithArtifact:$composeVersion"
 
 private fun setUpGroovyDslExtensions(project: Project) {
-    // add compose extension for Groovy DSL to work
-    project.dependencies.extensions.add("compose", ComposePlugin.Dependencies)
     project.plugins.withId("org.jetbrains.kotlin.multiplatform") {
         (project.extensions.getByName("kotlin") as? ExtensionAware)?.apply {
-            extensions.add("compose", ComposePlugin.Dependencies)
+            extensions.add("compose", ComposePlugin.Dependencies(project))
         }
     }
     (project.repositories as? ExtensionAware)?.extensions?.apply {

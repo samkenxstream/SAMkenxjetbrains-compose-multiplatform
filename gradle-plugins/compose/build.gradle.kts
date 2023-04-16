@@ -1,6 +1,5 @@
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
-import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform.getCurrentOperatingSystem
-import java.util.zip.ZipFile
+import de.undercouch.gradle.tasks.download.Download
 
 plugins {
     kotlin("jvm")
@@ -9,6 +8,7 @@ plugins {
     id("java-gradle-plugin")
     id("maven-publish")
     id("com.github.johnrengelman.shadow") version "7.0.0"
+    id("de.undercouch.download") version "5.3.0"
 }
 
 gradlePluginConfig {
@@ -30,8 +30,6 @@ val buildConfig = tasks.register("buildConfig", GenerateBuildConfig::class.java)
     generatedOutputDir.set(buildConfigDir)
     fieldsToGenerate.put("composeVersion", BuildProperties.composeVersion(project))
     fieldsToGenerate.put("composeGradlePluginVersion", BuildProperties.deployVersion(project))
-    fieldsToGenerate.put("experimentalOELPublication", BuildProperties.experimentalOELPublication(project))
-    fieldsToGenerate.put("oelAndroidXVersion", BuildProperties.oelAndroidXVersion(project).orEmpty())
 }
 tasks.named("compileKotlin") {
     dependsOn(buildConfig)
@@ -63,11 +61,10 @@ dependencies {
     compileOnly(kotlin("native-utils"))
 
     testImplementation(gradleTestKit())
-    testImplementation(platform("org.junit:junit-bom:5.7.0"))
-    testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation(kotlin("gradle-plugin-api"))
 
     // include relocated download task to avoid potential runtime conflicts
-    embedded("de.undercouch:gradle-download-task:4.1.1")
+    embedded("de.undercouch:gradle-download-task:5.3.0")
 
     embedded("org.jetbrains.kotlinx:kotlinx-serialization-json:${BuildProperties.serializationVersion}")
     embedded("org.jetbrains.kotlinx:kotlinx-serialization-core:${BuildProperties.serializationVersion}")
@@ -82,6 +79,7 @@ val shadow = tasks.named<ShadowJar>("shadowJar") {
     archiveClassifier.set("shadow")
     configurations = listOf(embeddedDependencies)
     exclude("META-INF/gradle-plugins/de.undercouch.download.properties")
+    exclude("META-INF/versions/**")
 }
 
 val jar = tasks.named<Jar>("jar") {
@@ -90,61 +88,18 @@ val jar = tasks.named<Jar>("jar") {
     this.duplicatesStrategy = DuplicatesStrategy.INCLUDE
 }
 
-// __SUPPORTED_GRADLE_VERSIONS__
-testGradleVersion("6.4")
-testGradleVersion("7.1.1")
-testGradleVersion("7.3.3")
+val supportedGradleVersions = project.property("compose.tests.gradle.versions")
+    .toString().split(",")
+    .map { it.trim() }
+    .map { GradleVersion.version(it) }
 
-val javaHomeForTests: String? = when {
-    // __COMPOSE_NATIVE_DISTRIBUTIONS_MIN_JAVA_VERSION__
-    JavaVersion.current() >= JavaVersion.VERSION_15 -> System.getProperty("java.home")
-    else -> System.getenv("JDK_15")
-         ?: System.getenv("JDK_FOR_GRADLE_TESTS")
-}
-val isWindows = getCurrentOperatingSystem().isWindows
-
-val gradleTestsPattern = "org.jetbrains.compose.gradle.*"
+val gradleTestsPattern = "org.jetbrains.compose.test.tests.integration.*"
 
 // check we don't accidentally including unexpected classes (e.g. from embedded dependencies)
-val checkJar by tasks.registering {
+tasks.registerVerificationTask<CheckJarPackagesTask>("checkJar") {
     dependsOn(jar)
-
-    doLast {
-        val file = jar.get().archiveFile.get().asFile
-        ZipFile(file).use { zip ->
-            checkJarContainsExpectedPackages(zip)
-        }
-    }
-}
-
-// we want to avoid accidentally including unexpected jars/packages, e.g kotlin-stdlib etc
-fun checkJarContainsExpectedPackages(jar: ZipFile) {
-    val expectedPackages = arrayOf(
-        "org/jetbrains/compose",
-        "kotlinx/serialization"
-    )
-    val unexpectedClasses = arrayListOf<String>()
-
-    for (entry in jar.entries()) {
-        if (entry.isDirectory || !entry.name.endsWith(".class")) continue
-
-        if (expectedPackages.none { prefix -> entry.name.startsWith(prefix) }) {
-            unexpectedClasses.add(entry.name)
-        }
-    }
-
-    if (unexpectedClasses.any()) {
-        error(buildString {
-            appendLine("Some classes from ${jar.name} are not from 'org.jetbrains.compose' package:")
-            unexpectedClasses.forEach {
-                appendLine("  * $it")
-            }
-        })
-    }
-}
-
-tasks.check {
-    dependsOn(checkJar)
+    jarFile.set(jar.archiveFile)
+    allowedPackagePrefixes.addAll("org.jetbrains.compose", "kotlinx.serialization")
 }
 
 tasks.test {
@@ -154,29 +109,64 @@ tasks.test {
         excludeTestsMatching(gradleTestsPattern)
     }
 }
-fun testGradleVersion(gradleVersion: String) {
-    val taskProvider = tasks.register("testGradle-$gradleVersion", Test::class) {
-        tasks.test.get().let { defaultTest ->
-            classpath = defaultTest.classpath
+
+/**
+ * Gradle 8.0 removed auto downloading of requested toolchains unless a toolchain repository is configured.
+ * For now, the only option to enable auto downloading out-of-the-box is to use Foojay Disco resolver,
+ * which uses api.foojay.io service.
+ * It is not desirable to depend on little known service for provisioning JDK distributions, even for tests.
+ * Thus, the only option is to download the necessary JDK distributions ourselves.
+ */
+val jdkVersionsForTests = listOf(11, 19)
+val jdkForTestsRoot = project.gradle.gradleUserHomeDir.resolve("compose-jb-jdks")
+val downloadJdksForTests = tasks.register("downloadJdksForTests") {}
+
+for (jdkVersion in jdkVersionsForTests) {
+    val ext = if (hostOS == OS.Windows) ".zip" else ".tar.gz"
+    val archive = jdkForTestsRoot.resolve("$jdkVersion$ext")
+    val unpackDir = jdkForTestsRoot.resolve("$jdkVersion").apply { mkdirs() }
+    val downloadJdkTask = tasks.register("downloadJdk$jdkVersion", Download::class) {
+        src("https://corretto.aws/downloads/latest/amazon-corretto-$jdkVersion-x64-${hostOS.id}-jdk$ext")
+        dest(archive)
+        onlyIf { !dest.exists() }
+    }
+    val unpackJdkTask = tasks.register("unpackJdk$jdkVersion", Copy::class) {
+        dependsOn(downloadJdkTask)
+        val archive = archive
+        val archiveTree = when {
+            archive.name.endsWith(".tar.gz") -> tarTree(archive)
+            archive.name.endsWith(".zip") -> zipTree(archive)
+            else -> error("Unsupported archive format: ${archive.name}")
         }
-        systemProperty("gradle.version.for.tests", gradleVersion)
+        from(archiveTree)
+        into(unpackDir)
+        onlyIf { (unpackDir.listFiles()?.size ?: 0) == 0 }
+    }
+    downloadJdksForTests.dependsOn(unpackJdkTask)
+}
+
+for (gradleVersion in supportedGradleVersions) {
+    tasks.registerVerificationTask<Test>("testGradle-${gradleVersion.version}") {
+        classpath = tasks.test.get().classpath
+
+        dependsOn(downloadJdksForTests)
+        systemProperty("compose.tests.gradle.test.jdks.root", jdkForTestsRoot.absolutePath)
+        if (gradleVersion >= GradleVersion.version("7.6")) {
+            systemProperty("compose.tests.gradle.configuration.cache", "true")
+        }
+        systemProperty("compose.tests.gradle.version", gradleVersion.version)
         filter {
             includeTestsMatching(gradleTestsPattern)
         }
     }
-    tasks.named("check") {
-        dependsOn(taskProvider)
-    }
 }
 
-configureJUnit()
-
-tasks.withType<Test>().configureEach {
-    configureJavaForComposeTest()
-
+configureAllTests {
     dependsOn(":publishToMavenLocal")
-    systemProperty("compose.plugin.version", BuildProperties.deployVersion(project))
-    systemProperty("kotlin.version", project.property("kotlin.version").toString())
+    systemProperty("compose.tests.compose.gradle.plugin.version", BuildProperties.deployVersion(project))
+    val summaryDir = project.buildDir.resolve("test-summary")
+    systemProperty("compose.tests.summary.file", summaryDir.resolve("$name.md").absolutePath)
+    systemProperties(project.properties.filter { it.key.startsWith("compose.") })
 }
 
 task("printAllAndroidxReplacements") {

@@ -2,6 +2,7 @@ package org.jetbrains.compose.videoplayer
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -13,10 +14,8 @@ import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent
 import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent
 import java.util.*
 
-
 @Composable
 internal actual fun VideoPlayerImpl(url: String, width: Int, height: Int) {
-    println("Video player for $url")
     NativeDiscovery().discover()
     val mediaPlayerComponent = remember {
         // see https://github.com/caprica/vlcj/issues/887#issuecomment-503288294 for why we're using CallbackMediaPlayerComponent for macOS.
@@ -27,9 +26,15 @@ internal actual fun VideoPlayerImpl(url: String, width: Int, height: Int) {
         }
     }
     SideEffect {
-        val ok = mediaPlayerComponent.mediaPlayer().media().play(url)
-        println("play gave $ok")
+        mediaPlayerComponent.mediaPlayer().media().play(url)
     }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            mediaPlayerComponent.mediaPlayer().release()
+        }
+    }
+
     return SwingPanel(
         background = Color.Transparent,
         modifier = Modifier.fillMaxSize(),

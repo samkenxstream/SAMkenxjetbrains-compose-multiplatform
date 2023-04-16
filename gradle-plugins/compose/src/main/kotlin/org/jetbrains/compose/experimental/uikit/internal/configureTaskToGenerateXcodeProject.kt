@@ -13,11 +13,14 @@ internal fun Project.configureTaskToGenerateXcodeProject(
     id: String,
     projectName: String,
     bundleIdPrefix: String,
-    teamId: String? = null,
+    getTeamId: () -> String? = { null },
     taskInstallXcodeGen: TaskProvider<*>,
 ): TaskProvider<AbstractComposeIosTask> = tasks.composeIosTask<AbstractComposeIosTask>("iosGenerateXcodeProject$id") {
     dependsOn(taskInstallXcodeGen)
     doLast {
+        val commonMainResources = file("src/commonMain/resources").absolutePath
+        val uikitMainResources = file("src/uikitMain/resources").absolutePath
+        val iosMainResources = file("src/iosMain/resources").absolutePath
         val buildIosDir = getBuildIosDir(id)
         buildIosDir.mkdirs()
         buildIosDir.resolve("project.yml").writeText(
@@ -26,7 +29,7 @@ internal fun Project.configureTaskToGenerateXcodeProject(
             options:
               bundleIdPrefix: $bundleIdPrefix
             settings:
-              ${if (teamId != null) "DEVELOPMENT_TEAM: \"$teamId\"" else ""}
+              ${if (getTeamId() != null) "DEVELOPMENT_TEAM: \"${getTeamId()}\"" else ""}
               CODE_SIGN_IDENTITY: "iPhone Developer"
               CODE_SIGN_STYLE: Automatic
               MARKETING_VERSION: "1.0"
@@ -37,26 +40,25 @@ internal fun Project.configureTaskToGenerateXcodeProject(
                 type: application
                 platform: iOS
                 deploymentTarget: "12.0"
-                prebuildScripts:
-                  - script: cd "${rootDir.absolutePath}" && ./gradlew -i -p . packComposeUikitApplicationForXCode
-                    name: GradleCompile
                 info:
                   path: plists/Ios/Info.plist
                   properties:
-                    UILaunchStoryboardName: ""
-                    method: "development"
-                sources:
-                  - path: "../../../src/"
-                    excludes:
-                      - "jvm*/**"
-                      - "desktop*/**"
-                      - "android*/**"
-                      - "*Test/**"
+                    UILaunchStoryboardName: $projectName
                 settings:
                   LIBRARY_SEARCH_PATHS: "$(inherited)"
                   ENABLE_BITCODE: "YES"
                   ONLY_ACTIVE_ARCH: "NO"
                   VALID_ARCHS: "arm64"
+                sources:
+                  - path: $commonMainResources
+                    optional: true
+                    buildPhase: resources
+                  - path: $uikitMainResources
+                    optional: true
+                    buildPhase: resources
+                  - path: $iosMainResources
+                    optional: true
+                    buildPhase: resources
             """.trimIndent()
         )
         runExternalTool(xcodeGenExecutable, emptyList(), workingDir = buildIosDir)

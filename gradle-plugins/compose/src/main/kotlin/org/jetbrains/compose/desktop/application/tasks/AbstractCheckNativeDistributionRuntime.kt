@@ -6,30 +6,35 @@
 package org.jetbrains.compose.desktop.application.tasks
 
 import org.gradle.api.file.Directory
-import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.file.RegularFile
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.*
-import org.jetbrains.compose.desktop.application.internal.JavaRuntimeProperties
-import org.jetbrains.compose.desktop.application.internal.executableName
-import org.jetbrains.compose.desktop.application.internal.ioFile
-import org.jetbrains.compose.desktop.application.internal.notNullProperty
+import org.jetbrains.compose.desktop.application.internal.JvmRuntimeProperties
+import org.jetbrains.compose.internal.utils.executableName
+import org.jetbrains.compose.internal.utils.ioFile
+import org.jetbrains.compose.internal.utils.notNullProperty
+import org.jetbrains.compose.desktop.application.internal.ExternalToolRunner
 import org.jetbrains.compose.desktop.tasks.AbstractComposeDesktopTask
+import org.jetbrains.compose.internal.utils.clearDirs
 import java.io.File
 
 // __COMPOSE_NATIVE_DISTRIBUTIONS_MIN_JAVA_VERSION__
-internal const val MIN_JAVA_RUNTIME_VERSION = 15
+internal const val MIN_JAVA_RUNTIME_VERSION = 17
 
 @CacheableTask
 abstract class AbstractCheckNativeDistributionRuntime : AbstractComposeDesktopTask() {
-    @get:Input
+    @get:PathSensitive(PathSensitivity.ABSOLUTE)
+    @get:InputDirectory
     val javaHome: Property<String> = objects.notNullProperty()
 
+    private val taskDir = project.layout.buildDirectory.dir("compose/tmp/$name")
+
     @get:OutputFile
-    val javaRuntimePropertiesFile: RegularFileProperty = objects.fileProperty()
+    val javaRuntimePropertiesFile: Provider<RegularFile> = taskDir.map { it.file("properties.bin") }
 
     @get:LocalState
-    val workingDir: Provider<Directory> = project.layout.buildDirectory.dir("compose/tmp/$name")
+    val workingDir: Provider<Directory> = taskDir.map { it.dir("localState") }
 
     private val javaExec: File
         get() = getTool("java")
@@ -46,6 +51,8 @@ abstract class AbstractCheckNativeDistributionRuntime : AbstractComposeDesktopTa
 
     @TaskAction
     fun run() {
+        taskDir.ioFile.mkdirs()
+
         val javaRuntimeVersion = try {
             getJavaRuntimeVersionUnsafe()?.toIntOrNull() ?: -1
         } catch (e: Exception) {
@@ -65,7 +72,7 @@ abstract class AbstractCheckNativeDistributionRuntime : AbstractComposeDesktopTa
         runExternalTool(
             tool = javaExec,
             args = listOf("--list-modules"),
-            forceLogToFile = true,
+            logToConsole = ExternalToolRunner.LogToConsole.Never,
             processStdout = { stdout ->
                 stdout.lineSequence().forEach { line ->
                     val moduleName = line.trim().substringBefore("@")
@@ -76,12 +83,12 @@ abstract class AbstractCheckNativeDistributionRuntime : AbstractComposeDesktopTa
             }
         )
 
-        val properties = JavaRuntimeProperties(javaRuntimeVersion, modules)
-        JavaRuntimeProperties.writeToFile(properties, javaRuntimePropertiesFile.ioFile)
+        val properties = JvmRuntimeProperties(javaRuntimeVersion, modules)
+        JvmRuntimeProperties.writeToFile(properties, javaRuntimePropertiesFile.ioFile)
     }
 
     private fun getJavaRuntimeVersionUnsafe(): String? {
-        cleanDirs(workingDir)
+        fileOperations.clearDirs(workingDir)
         val workingDir = workingDir.ioFile
 
         val printJavaRuntimeClassName = "PrintJavaRuntimeVersion"

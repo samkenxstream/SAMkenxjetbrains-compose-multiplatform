@@ -5,25 +5,36 @@
 
 package org.jetbrains.compose
 
+import org.gradle.api.Project
 import org.gradle.api.provider.Provider
+import org.jetbrains.compose.internal.ComposeCompilerArtifactProvider
 import org.jetbrains.compose.internal.webExt
 import org.jetbrains.kotlin.gradle.plugin.*
 import org.jetbrains.kotlin.gradle.targets.js.ir.KotlinJsIrTarget
 
 class ComposeCompilerKotlinSupportPlugin : KotlinCompilerPluginSupportPlugin {
+    private lateinit var composeCompilerArtifactProvider: ComposeCompilerArtifactProvider
+
+    override fun apply(target: Project) {
+        super.apply(target)
+        target.plugins.withType(ComposePlugin::class.java) {
+            val composeExt = target.extensions.getByType(ComposeExtension::class.java)
+
+            composeCompilerArtifactProvider = ComposeCompilerArtifactProvider {
+                composeExt.kotlinCompilerPlugin.orNull ?:
+                    ComposeCompilerCompatibility.compilerVersionFor(target.getKotlinPluginVersion())
+            }
+        }
+    }
+
     override fun getCompilerPluginId(): String =
         "androidx.compose.compiler.plugins.kotlin"
 
-    override fun getPluginArtifactForNative(): SubpluginArtifact =
-        composeCompilerArtifact("compiler-hosted")
-
     override fun getPluginArtifact(): SubpluginArtifact =
-        composeCompilerArtifact("compiler")
+        composeCompilerArtifactProvider.compilerArtifact
 
-    private fun composeCompilerArtifact(artifactId: String) =
-        SubpluginArtifact(
-            groupId = "org.jetbrains.compose.compiler", artifactId = artifactId, version = composeVersion
-        )
+    override fun getPluginArtifactForNative(): SubpluginArtifact =
+        composeCompilerArtifactProvider.compilerHostedArtifact
 
     override fun isApplicable(kotlinCompilation: KotlinCompilation<*>): Boolean =
         when (kotlinCompilation.target.platformType) {
@@ -32,6 +43,7 @@ class ComposeCompilerKotlinSupportPlugin : KotlinCompilerPluginSupportPlugin {
             KotlinPlatformType.js -> isApplicableJsTarget(kotlinCompilation.target)
             KotlinPlatformType.androidJvm -> true
             KotlinPlatformType.native -> true
+            KotlinPlatformType.wasm -> false
         }
 
     private fun isApplicableJsTarget(kotlinTarget: KotlinTarget): Boolean {

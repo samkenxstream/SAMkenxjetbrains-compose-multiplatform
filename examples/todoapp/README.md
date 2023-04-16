@@ -7,7 +7,7 @@ This example supports the following targets:
 - `iOS` (SwiftUI, not Compose)
 
 Libraries used:
-- Jetpack Compose - shared UI
+- Compose Multiplatform - shared UI
 - [Decompose](https://github.com/arkivanov/Decompose) - navigation and lifecycle
 - [MVIKotlin](https://github.com/arkivanov/MVIKotlin) - presentation and business logic
 - [Reaktive](https://github.com/badoo/Reaktive) - background processing and data transformation
@@ -22,7 +22,7 @@ There are multiple modules:
 - `:common:compose-ui` - Shared Compose UI for Android and Desktop
 - `:android` - Android application
 - `:desktop` - Desktop application
-- `:web` - Web browser application + Compose Web UI 
+- `:web` - Web browser application + Compose HTML Library 
 - `ios` - iOS Xcode project
 
 The root module is integrated into Android, Desktop and iOS (non-Compose) apps.
@@ -34,13 +34,13 @@ Features:
 - Pluggable UI - Compose UI for Android, Desktop and Web, SwiftUI (not Compose) for iOS
 
 ### Running desktop application
-```
-./gradlew :desktop:run
-```
+ * To run, launch command: `./gradlew :desktop:run`
+ * Or choose **desktop** configuration in IDE and run it.  
+  ![desktop-run-configuration.png](screenshots/desktop-run-configuration.png)
 
 #### Building native desktop distribution
 ```
-./gradlew :desktop:package
+./gradlew :desktop:packageDistributionForCurrentOS
 # outputs are written to desktop/build/compose/binaries
 ```
 
@@ -49,9 +49,10 @@ Features:
 Open project in Intellij IDEA or Android Studio and run "android" configuration.
 
 ### Running Web browser application
-```
-./gradlew :web:jsBrowserDevelopmentRun
-```
+
+ * To run, launch command: `./gradlew :web:jsBrowserDevelopmentRun`
+ * Or choose **browser** configuration in IDE and run it.  
+  ![browser-run-configuration.png](screenshots/browser-run-configuration.png)
 
 ### Running iOS application
 
